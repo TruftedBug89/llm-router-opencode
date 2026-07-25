@@ -1,0 +1,53 @@
+{
+  "name": "opencode-llm-router",
+  "version": "0.1.0",
+  "description": "Automatic, configurable multi-signal LLM router for opencode. Classifies every prompt with a small AI plus local signals (complexity, task type, context length, tools, PII, custom rules, optional BERT) and routes it to the right model.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "llm-router.example.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "llm-router",
+    "model-router",
+    "ai-router",
+    "llm",
+    "ai"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-username/opencode-llm-router.git"
+  },
+  "homepage": "https://github.com/your-username/opencode-llm-router#readme",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.5",
+    "@opencode-ai/sdk": "^1.18.5",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.5.0"
+  },
+  "peerDependencies": {
+    "@huggingface/transformers": "^3.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@huggingface/transformers": {
+      "optional": true
+    }
+  }
+}

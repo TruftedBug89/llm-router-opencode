@@ -1,0 +1,152 @@
+{
+  // ==========================================================================
+  // opencode-llm-router — example configuration (JSONC: comments allowed)
+  //
+  // Copy this file to one of:
+  //   global:  ~/.config/opencode/llm-router.json
+  //   project: <your-project>/.opencode/llm-router.json
+  // Then edit the `routes` models to providers YOU have connected in opencode.
+  // ==========================================================================
+
+  // "suggest" only shows what it WOULD do (safe evaluation).
+  // Switch to "auto" to actually reroute, "off" to disable.
+  "mode": "suggest",
+
+  // Show a TUI toast on every routing decision.
+  "notify": true,
+
+  // If you explicitly pick a model variant (e.g. "high" reasoning effort),
+  // the router respects it and steps aside.
+  "respectVariant": true,
+
+  // Winner's normalized vote share required to reroute. Below: keep your model.
+  "minConfidence": 0.4,
+
+  // Agents that are never rerouted.
+  "skipAgents": [],
+
+  // -------------------------------------------------------------------------
+  // THE SMALL AI — classifies ambiguous prompts with a fast, cheap model.
+  // Any OpenAI-compatible endpoint works: OpenRouter, Ollama, LM Studio, vLLM…
+  // PRIVACY: the (truncated) prompt text is sent to this endpoint.
+  // Point it at a local Ollama for 100% local classification.
+  // -------------------------------------------------------------------------
+  "classifier": {
+    "enabled": true,
+    "baseURL": "https://openrouter.ai/api/v1",
+    "apiKeyEnv": "OPENROUTER_API_KEY", // or "apiKey": "{env:OPENROUTER_API_KEY}"
+    "model": "google/gemini-2.5-flash-lite",
+    "timeoutMs": 4000,
+    "maxChars": 4000,
+    "weight": 2,
+    // "uncertain": only call it when heuristics disagree (recommended).
+    // "always": call it on every message.
+    "when": "uncertain",
+    "cacheTtlMinutes": 60
+
+    // --- Fully local alternative (Ollama) ---
+    // "baseURL": "http://localhost:11434/v1",
+    // "apiKey": "ollama",
+    // "model": "qwen3:4b",
+  },
+
+  // -------------------------------------------------------------------------
+  // ROUTES — category -> model. Use "keep" (or omit the category) to leave
+  // the message on your currently selected model.
+  // EDIT THESE to match your providers! Format: "provider/modelID".
+  // -------------------------------------------------------------------------
+  "routes": {
+    "trivial": "openai/gpt-4.1-nano", // greetings, "thanks", one-liners
+    "simple": "openai/gpt-4.1-mini", // simple Q&A, translations, summaries
+    "code": "anthropic/claude-sonnet-4-5", // programming, debugging, config
+    "reasoning": {
+      // math, architecture, analysis — with per-category sampling params
+      "model": "openai/o3",
+      "params": { "temperature": 0.1 }
+    },
+    "creative": "anthropic/claude-opus-4-5", // stories, marketing, brainstorming
+    "vision": "openai/gpt-4.1", // prompts with images attached
+    "agentic": "anthropic/claude-sonnet-4-5", // multi-step tool use
+    "long_context": "google/gemini-2.5-pro", // huge prompts / many files
+    "private": "ollama/qwen3:8b" // PII/credentials detected -> LOCAL model
+  },
+
+  // -------------------------------------------------------------------------
+  // SIGNALS — each one votes; the router fuses all votes with these weights.
+  // -------------------------------------------------------------------------
+  "signals": {
+    "complexity": { "enabled": true, "weight": 1 },
+    "taskType": { "enabled": true, "weight": 1 },
+    "contextLength": { "enabled": true, "weight": 1, "longChars": 24000 },
+    "toolsNeeded": { "enabled": true, "weight": 1 },
+
+    "pii": {
+      "enabled": true,
+      "action": "route", // veto into the "private" route on PII
+      "route": "private"
+      // "types": ["email", "credit_card", "aws_access_key"] // optional subset
+    },
+
+    "rules": {
+      "enabled": true,
+      "weight": 3,
+      "list": [
+        // Hard guardrails first: veto rules short-circuit everything.
+        {
+          "name": "prod-changes-get-the-smart-model",
+          "match": "\\b(production|prod)\\b.*\\b(deploy|database|migration)\\b",
+          "route": "reasoning",
+          "veto": true
+        },
+        // Soft preferences: weighted votes.
+        { "name": "k8s", "match": "kubernetes|k8s|helm", "route": "code" },
+        { "name": "spanish-copy", "match": "(redacta|escribe).*(post|artículo|tweet)", "route": "creative" }
+      ]
+    },
+
+    // Optional local BERT zero-shot classifier (transformers.js).
+    // Requires: npm i @huggingface/transformers   (in the plugin directory)
+    "bert": {
+      "enabled": false,
+      "model": "Xenova/distilbert-base-uncased-mnli",
+      "labels": [
+        "trivial small talk",
+        "simple question",
+        "programming or code",
+        "advanced math or logical reasoning",
+        "creative writing",
+        "multi-step task requiring tools"
+      ],
+      "labelMap": {
+        "trivial small talk": "trivial",
+        "simple question": "simple",
+        "programming or code": "code",
+        "advanced math or logical reasoning": "reasoning",
+        "creative writing": "creative",
+        "multi-step task requiring tools": "agentic"
+      },
+      "weight": 1.5,
+      "maxChars": 2000
+    },
+
+    // Your own signal plugins: JS/TS modules exporting a function
+    // (ctx) => ({ votes: { code: 0.9 }, reason: "..." }) or null.
+    "custom": {
+      "enabled": true,
+      "weight": 1,
+      "paths": [
+        // ".opencode/signals/my-signal.ts"
+      ]
+    }
+  },
+
+  // Decision audit log (JSONL). NEVER contains prompt text — only decisions.
+  "log": {
+    "enabled": true
+    // "path": "C:/logs/llm-router.jsonl",
+    // "maxBytes": 5242880
+  },
+
+  // Verbose console logging of every decision.
+  "debug": false
+}
