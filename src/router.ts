@@ -20,11 +20,15 @@
 import type { ClassifierCall } from "./classifier.ts"
 import type {
   CapabilitiesLookup,
+  CatalogEntry,
+  CatalogLister,
   Category,
   Classification,
   ClassifierConfig,
   Decision,
   ModelRef,
+  ModelSelector,
+  RouteModel,
   RouteParams,
   RouteTarget,
   SignalContext,
@@ -39,6 +43,7 @@ export interface DecideInput {
   outcomes: SignalOutcome[]
   classifyFn?: ClassifyFn
   capabilities?: CapabilitiesLookup
+  catalog?: CatalogLister
 }
 
 /** task_type from the small AI -> route category */
@@ -65,8 +70,10 @@ export function parseModelRef(ref: string): ModelRef | null {
   return { providerID: ref.slice(0, idx), modelID: ref.slice(idx + 1) }
 }
 
-function normalizeRouteTarget(route: string | RouteTarget): RouteTarget {
-  return typeof route === "string" ? { model: route } : route
+export function normalizeRouteTarget(route: string | string[] | RouteTarget): RouteTarget {
+  if (typeof route === "string") return { model: route }
+  if (Array.isArray(route)) return { model: route }
+  return route
 }
 
 export interface ModelResolution {
@@ -76,11 +83,69 @@ export interface ModelResolution {
 }
 
 /**
- * Resolve a route target against the model catalog: the first candidate that
- * is available wins. Without a catalog, the first well-formed candidate is
- * used optimistically. Returns null when nothing is usable.
+ * Pick a model from the live catalog using a selector. Deprecated models are
+ * always excluded. Returns null when nothing matches.
  */
-export function resolveModel(target: string | string[], capabilities?: CapabilitiesLookup): ModelResolution | null {
+export function selectModel(selector: ModelSelector, catalog: CatalogEntry[]): ModelResolution | null {
+  let candidates = catalog.filter((e) => e.caps.status !== "deprecated")
+  if (selector.freeOnly) candidates = candidates.filter((e) => e.caps.free === true)
+  if (selector.vision) candidates = candidates.filter((e) => e.caps.imageInput === true)
+  if (selector.minContext !== undefined) {
+    candidates = candidates.filter((e) => (e.caps.contextLimit ?? 0) >= selector.minContext!)
+  }
+  if (selector.providers && selector.providers.length > 0) {
+    const allowed = new Set(selector.providers)
+    candidates = candidates.filter((e) => allowed.has(e.providerID))
+  }
+  if (candidates.length === 0) return null
+
+  const order = (entries: CatalogEntry[]): CatalogEntry[] => {
+    const sorted = [...entries]
+    if (selector.providers && selector.providers.length > 0) {
+      const priority = new Map(selector.providers.map((p, i) => [p, i]))
+      sorted.sort((a, b) => (priority.get(a.providerID) ?? 99) - (priority.get(b.providerID) ?? 99))
+    }
+    if (selector.pick === "largest") {
+      sorted.sort((a, b) => (b.caps.contextLimit ?? 0) - (a.caps.contextLimit ?? 0))
+    } else if (selector.pick === "smallest") {
+      sorted.sort((a, b) => (a.caps.contextLimit ?? 0) - (b.caps.contextLimit ?? 0))
+    }
+    return sorted
+  }
+
+  for (const pattern of selector.prefer ?? []) {
+    let re: RegExp
+    try {
+      re = new RegExp(pattern, "i")
+    } catch {
+      continue
+    }
+    const matches = candidates.filter((e) => re.test(`${e.providerID}/${e.modelID}`) || (e.caps.name !== undefined && re.test(e.caps.name)))
+    const best = order(matches)[0]
+    if (best) return { model: { providerID: best.providerID, modelID: best.modelID }, skipped: [] }
+  }
+
+  const best = order(candidates)[0]!
+  return { model: { providerID: best.providerID, modelID: best.modelID }, skipped: [] }
+}
+
+/**
+ * Resolve a route target into a concrete model:
+ *   - { auto: selector }  -> dynamic pick from the live catalog
+ *   - "a/x" | ["a/x", …]  -> first available candidate (optimistic first
+ *     when no catalog is loaded). "keep" entries are skipped.
+ * Returns null when nothing is usable.
+ */
+export function resolveModel(
+  target: RouteModel,
+  capabilities?: CapabilitiesLookup,
+  catalog?: CatalogLister,
+): ModelResolution | null {
+  if (typeof target === "object" && !Array.isArray(target) && "auto" in target) {
+    if (!catalog) return null
+    return selectModel(target.auto, catalog())
+  }
+
   const candidates = (Array.isArray(target) ? target : [target]).filter((c) => c !== "keep")
   const skipped: string[] = []
   for (const candidate of candidates) {
@@ -330,8 +395,8 @@ export async function decide(input: DecideInput): Promise<Decision> {
     )
   }
 
-  // -- 8. resolve the fallback chain against the model catalog -------------
-  const resolution = resolveModel(target.model, capabilities)
+  // -- 8. resolve the route target against the live model catalog ----------
+  const resolution = resolveModel(target.model, capabilities, input.catalog)
   if (!resolution) {
     return finish(
       baseDecision({

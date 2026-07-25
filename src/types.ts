@@ -88,7 +88,7 @@ export interface RouteTarget {
   params?: RouteParams
 }
 
-export type Route = string | RouteTarget
+export type Route = string | string[] | RouteTarget
 
 /** A user-defined routing rule evaluated against the raw prompt text. */
 export interface CustomRule {

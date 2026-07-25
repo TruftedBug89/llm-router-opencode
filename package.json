@@ -1,6 +1,6 @@
 {
   "name": "opencode-llm-router",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Automatic, configurable multi-signal LLM router for opencode. Classifies every prompt with a small AI plus local signals (complexity, task type, context length, tools, PII, custom rules, optional BERT) and routes it to the right model.",
   "type": "module",
   "main": "src/index.ts",

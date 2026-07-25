@@ -4,245 +4,179 @@
 [![CI](https://github.com/your-username/opencode-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/opencode-llm-router/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Automatic, configurable multi-signal LLM router for [opencode](https://opencode.ai).**
-Every prompt is analyzed — in milliseconds — by a fusion of local signals **and** a small AI classifier, then answered by the best model for the job. Cheap model for "hi", smart model for architecture, local model for your secrets.
+**Automatic LLM router for [opencode](https://opencode.ai).** Every message is analyzed in milliseconds by a fusion of local signals **plus a small AI from your own opencode catalog**, then answered by the best model for the job. Free models for the small stuff, your best models for the hard stuff, a private lane for your secrets.
+
+Zero configuration needed: routes are **dynamic selectors resolved against your live model catalog** (zen free, Go, whatever you connect) — no hardcoded model IDs, nothing goes stale when model lists rotate.
+
+## Install (2 minutes)
+
+**1.** Add the plugin to `~/.config/opencode/opencode.json` (or your project's `opencode.json`):
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-llm-router"]
+}
+```
+
+**2.** Quit and restart opencode.
+
+**3.** Press **Tab** until you reach the new **`auto-router`** mode (it's `build` + routing) and chat normally. Done. ✅
+
+You'll see a toast on every routed message. That's it — free zen models answer the trivial stuff, your best available models get the hard work.
+
+> Prefer evaluating first? Create `~/.config/opencode/llm-router.json` with `{ "mode": "suggest" }` — the router will only *show* what it would do. Flip to `"auto"` when you trust it.
+
+## Using it
+
+| You do | What happens |
+| --- | --- |
+| **Tab → `auto-router`** | Messages in this mode are routed. `build` and `plan` stay untouched. |
+| **`/router`** | Configure the plugin from inside opencode: `/router status`, or ask for any change ("route code to kimi-k3", "turn debug on"). The agent edits the JSONC config for you (restart needed). |
+| **`/router status`** | See current mode, routes, classifier and your latest routing decisions. |
+
+## What it does
 
 ```
- "hola 👋"                      →  trivial      →  gpt-4.1-nano      (fast & free-ish)
- "fix this TypeError in auth.ts" →  code         →  claude-sonnet-4-5  (your workhorse)
- "analyze this migration plan"   →  reasoning    →  o3 @ temp 0.1     (the big brain)
- "my card is 4242 4242..."       →  private      →  ollama/qwen3:8b   (never leaves your PC)
- "describe this screenshot"      →  vision       →  gpt-4.1           (image-capable)
+ "hola 👋"                        → trivial      → cheapest FREE model in your catalog
+ "fix this TypeError in auth.ts"  → code         → best coding model you have
+ "analyze this migration plan"    → reasoning    → strongest model @ temperature 0.1
+ "my card is 4242 4242..."        → private      → free/local lane (PII never upgrades)
+ "describe this screenshot"       → vision       → first image-capable model available
 ```
 
-## Why
-
-You pay for (and wait for) your flagship model on **every single message** — including "ok", "thanks" and "what does this regex do?". This plugin classifies each message and routes it to the right tier automatically, while hard guardrails keep PII away from cloud providers. If it's not confident, it simply keeps the model you picked.
-
-## Features
-
-- **Small-AI classifier** — ambiguous prompts are classified by a fast, cheap model through any OpenAI-compatible endpoint (OpenRouter, Ollama, LM Studio, vLLM…). Cached, timeout-guarded, fail-open.
-- **Many signals at once** — complexity heuristics, task type (code/math/creative/agentic), context length, required tools/modalities, custom regex rules, optional local **BERT** zero-shot classifier, and your own signal plugins.
-- **PII & secret detection** — emails, credit cards (Luhn-verified), IBANs, SSNs, phones, AWS/GitHub/OpenAI keys, JWTs, private key blocks → veto-routed to a local model.
-- **Capability-aware** — won't reroute to a vision model if your current one already sees images, nor to a long-context model if yours already fits. Won't route to models you don't have.
-- **Custom rules with vetoes** — your regex guardrails always win over every other signal.
-- **Per-category sampling params** — e.g. `temperature: 0.1` for reasoning, `0.9` for creative.
-- **Transparent** — TUI toasts + a JSONL decision log (that never stores your prompt text).
-- **Safe by design** — `suggest` mode to evaluate before trusting; low-confidence decisions keep your model; explicit variant choices are respected; the plugin fails open on any error.
-- **Zero runtime dependencies** — plain TypeScript, runs inside opencode's plugin host. Optional `@huggingface/transformers` for BERT.
+If it's not confident, it keeps the model you picked. If you pick a model variant explicitly, it steps aside. If anything breaks, it fails open. You're never worse off than without the plugin.
 
 ## How it works
 
 ```
-                ┌───────────────────────── your message ─────────────────────────┐
-                │                                                                │
-   local signals (µs, free)                                   small AI (only when
-   ├─ custom rules ─── veto? ──┐                               heuristics disagree)
-   ├─ PII detectors ── veto? ──┤      ┌─────────────┐          task_type, complexity,
-   ├─ tools needed ─── veto? ──┼─────▶│ FUSION      │◀───────── needs_tools, has_pii
-   ├─ complexity              │ votes │ weighted    │  votes
-   ├─ task type               ├──────▶│ categories  │
-   ├─ context length          │       └──────┬──────┘
-   ├─ BERT (optional)         │              ▼
-   └─ your signal plugins     │     capability checks (vision? context? available?)
-                               │              ▼
-                               └──── confidence gate ──► route.message.model = …
+                ┌─────────────────────── your message ───────────────────────┐
+   local signals (µs, free)                                    small AI (only when
+   ├─ custom rules ─── veto? ──┐     ┌──────────────┐          heuristics disagree)
+   ├─ PII detectors ── veto? ──┤     │   FUSION     │          a model from YOUR
+   ├─ tools needed ─── veto? ──┼────▶│  weighted    │◀──────── opencode catalog:
+   ├─ complexity               │     │  categories  │          task_type, complexity,
+   ├─ task type                ├────▶└──────┬───────┘          needs_tools, has_pii
+   ├─ context length           │            ▼
+   ├─ BERT (optional, local)   │   capability checks (vision? context? available?)
+   └─ your signal plugins      │            ▼
+                                └──── confidence gate ──► message.model = routed
 ```
 
-The plugin hooks opencode's `chat.message` event and rewrites the message's model **before** the request is built; `chat.params` then applies the category's sampling parameters. When nothing is confident enough, nothing changes.
+- Hooks opencode's `chat.message` (rewrites the model before the request is built) and `chat.params` (applies per-category temperature/topP/…).
+- The small-AI classifier runs through opencode itself (a hidden single-step agent + a throwaway session per call, cleaned up after). No external endpoints, no extra keys. Results are cached; calls have a timeout; failures just skip the AI vote.
+- The model catalog refreshes itself in the background (60 s TTL), so rotated free models and new Go models are picked up automatically.
 
-## Install
+## Features
 
-1. Add the plugin to your opencode config (`~/.config/opencode/opencode.json` globally, or `opencode.json` in a project):
+- **Dynamic model selection** — routes are `{ auto }` selectors over your live catalog (freeOnly, regex preferences, provider priority, vision, minContext, pick largest/smallest). Exact IDs and fallback chains are supported too.
+- **8+ signals fused per message** — complexity, task type, context length, tools needed, PII/secrets, your regex rules (with vetoes), optional local BERT, your own signal plugins.
+- **Small-AI classifier** — disambiguates uncertain prompts using your own catalog (default: the cheapest free model available). `when: "uncertain"` means zero added latency on obvious messages.
+- **PII & secret firewall** — emails, credit cards (Luhn-verified), IBANs, SSNs, phones, AWS/GitHub/OpenAI keys, JWTs, private-key blocks → hard veto into the `private` route.
+- **Capability-aware** — won't reroute to a vision model if your current one already sees images, nor to a long-context model if yours already fits, nor to models you don't have.
+- **`auto-router` agent + `/router` command** — Tab to opt in per session; configure without leaving the TUI.
+- **Transparent** — toasts + a JSONL decision log that never stores prompt text.
+- **Zero runtime dependencies.**
 
-   ```json
-   {
-     "$schema": "https://opencode.ai/config.json",
-     "plugin": ["opencode-llm-router"]
-   }
-   ```
+## Configuration
 
-2. Create a config file — global at `~/.config/opencode/llm-router.json` or per-project at `<project>/.opencode/llm-router.json`. Start from the annotated example:
+Optional — defaults work out of the box. Files are JSONC (comments OK), merged in this order: defaults < `~/.config/opencode/llm-router.json` < `<project>/.opencode/llm-router.json` < inline plugin options. See [`llm-router.example.json`](llm-router.example.json) for the fully annotated file.
 
-   ```bash
-   # Linux / macOS
-   curl -o ~/.config/opencode/llm-router.json \
-     https://raw.githubusercontent.com/your-username/opencode-llm-router/main/llm-router.example.json
-   ```
+| Key | Default | Description |
+| --- | --- | --- |
+| `mode` | `"auto"` | `"auto"` reroutes · `"suggest"` only notifies · `"off"` disables |
+| `onlyAgents` | `["auto-router"]` | Only these agents are routed. `[]` = route every agent |
+| `skipAgents` | `["llm-router-classifier"]` | Never routed |
+| `routes` | dynamic selectors | category → target (see below) |
+| `minConfidence` | `0.4` | Winner's vote share required to reroute |
+| `respectVariant` | `true` | Skip routing when you explicitly pick a model variant |
+| `notify` | `true` | Toast on each decision |
+| `debug` | `false` | Verbose console logging |
 
-   ```powershell
-   # Windows (PowerShell)
-   Invoke-WebRequest -Uri "https://raw.githubusercontent.com/your-username/opencode-llm-router/main/llm-router.example.json" `
-     -OutFile "$HOME/.config/opencode/llm-router.json"
-   ```
-
-3. **Edit `routes`** to models that exist in *your* connected providers, and set the classifier's API key env var (e.g. `OPENROUTER_API_KEY`).
-
-4. **Quit and restart opencode** (config is loaded once at startup).
-
-Start with `"mode": "suggest"` — the router shows a toast with what it *would* do on each message. When you like its judgment, switch to `"auto"`.
-
-## Quick start (fully local, free, private)
-
-No API key needed if you run [Ollama](https://ollama.com):
+### Route targets — 3 ways
 
 ```jsonc
-{
-  "mode": "auto",
-  "classifier": {
-    "enabled": true,
-    "baseURL": "http://localhost:11434/v1",
-    "apiKey": "ollama",
-    "model": "qwen3:4b"
-  },
-  "routes": {
-    "trivial": "ollama/qwen3:1.7b",
-    "code": "anthropic/claude-sonnet-4-5",
-    "private": "ollama/qwen3:8b"
-  }
+"routes": {
+  // 1. dynamic selector (default): resolved against your live catalog
+  "code": { "model": { "auto": { "providers": ["opencode-go", "opencode"], "prefer": ["code", "kimi"] } } },
+  // 2. exact model or fallback chain
+  "simple": ["opencode-go/kimi-k2.5", "opencode/big-pickle"],
+  // 3. sampling params on any object route · "keep" disables a category
+  "reasoning": { "model": { "auto": { "prefer": ["k3", "ultra", "max"] } }, "params": { "temperature": 0.1 } },
+  "vision": "keep"
 }
 ```
 
-## Configuration reference
+Selector fields: `prefer` (ordered regexes matched against model id **and** display name), `freeOnly`, `providers` (priority order), `vision`, `minContext`, `pick` (`first` | `largest` | `smallest`). Deprecated models are always excluded.
 
-Config files are JSONC (comments + trailing commas OK). Merge order: built-in defaults < global file < project file < inline plugin options (`["opencode-llm-router", { … }]`). Any string of the exact form `"{env:VAR_NAME}"` is replaced by that environment variable.
+Categories: `trivial` · `simple` · `code` · `reasoning` · `creative` · `vision` · `agentic` · `long_context` · `private`.
 
-| Key | Default | Description |
-| --- | --- | --- |
-| `mode` | `"auto"` | `"auto"` reroutes, `"suggest"` only notifies, `"off"` disables. |
-| `routes` | `{}` | `category → "provider/model"` or `{ model, params }`. `"keep"` = never change. |
-| `minConfidence` | `0.4` | Winner's normalized vote share required to reroute (0–1). |
-| `skipAgents` | `[]` | Agents that are never rerouted (e.g. `["plan"]`). |
-| `respectVariant` | `true` | Skip routing when you explicitly picked a model variant. |
-| `notify` | `true` | Show a TUI toast on each routing decision. |
-| `debug` | `false` | Verbose console logging. |
+### The small AI (`classifier`)
 
-### `classifier` (the small AI)
+```jsonc
+"classifier": {
+  "enabled": true,
+  "source": "opencode",                                  // uses YOUR catalog — default
+  "model": { "auto": { "freeOnly": true, "prefer": ["nano", "mini", "pickle"] } },
+  "when": "uncertain",        // only when heuristics disagree ("always" = every message)
+  "weight": 2, "timeoutMs": 6000, "cacheTtlMinutes": 60
+}
+```
 
-| Key | Default | Description |
-| --- | --- | --- |
-| `enabled` | `true` | Master switch. |
-| `baseURL` | `https://openrouter.ai/api/v1` | Any OpenAI-compatible endpoint. |
-| `apiKeyEnv` | `OPENROUTER_API_KEY` | Env var holding the API key. |
-| `apiKey` | — | Direct key; supports `"{env:VAR}"`. |
-| `model` | `google/gemini-2.5-flash-lite` | Small/fast/cheap classification model. |
-| `timeoutMs` | `4000` | Aborts slow calls; routing continues without them. |
-| `maxChars` | `4000` | Only this prefix of your prompt is classified. |
-| `weight` | `2` | Classifier vote weight in the fusion. |
-| `when` | `"uncertain"` | `"uncertain"` = only when heuristics disagree (no latency on obvious prompts). `"always"` = every message. |
-| `uncertainMargin` | `0.15` | Normalized best-minus-second margin that counts as "uncertain". |
-| `cacheTtlMinutes` | `60` | Result cache TTL (keyed by prompt hash). |
-| `systemPrompt` | built-in | Full override of the classifier instructions. |
-| `headers` | — | Extra HTTP headers for the endpoint. |
-
-> **Privacy:** the classifier sees the (truncated) text of your prompt. Point `baseURL` at a local server (Ollama, LM Studio) for fully local classification. PII detection runs **before** the classifier is consulted, and PII vetoes always win.
+`source: "endpoint"` switches to a raw OpenAI-compatible endpoint (Ollama, OpenRouter, LM Studio…) with `baseURL` / `apiKey` / `model`. Note: with `"source": "opencode"` the prompt text never leaves your opencode session flow.
 
 ### Signals
 
-| Signal | What it does | Key options |
-| --- | --- | --- |
-| `complexity` | Heuristic trivial/simple/reasoning scoring (EN/ES aware) | `weight` |
-| `taskType` | Keyword/regex buckets: code, math, creative, agentic | `weight` |
-| `contextLength` | Votes `long_context` past `longChars` (~chars/4 tokens) | `weight`, `longChars` (24000) |
-| `toolsNeeded` | Images → vision **veto**; files/URLs/@agents → votes | `weight` |
-| `pii` | Regex + Luhn PII/credential detection → **veto** to `route` | `action`, `route`, `types` |
-| `rules` | Your regexes: soft votes or hard vetoes (top priority) | `weight`, `list` |
-| `bert` | Local zero-shot classification via transformers.js | `enabled`, `model`, `labels`, `labelMap`, `weight` |
-| `custom` | Your own signal modules (`paths`) | `weight`, `paths` |
-
-### Categories
-
-`trivial`, `simple`, `code`, `reasoning`, `creative`, `vision`, `agentic`, `long_context`, `private`. Categories are just strings — custom rules and signals can introduce new ones as long as `routes` maps them.
-
-### Custom rules
+| Signal | What it does |
+| --- | --- |
+| `complexity` | Heuristic trivial/simple/reasoning scoring (EN/ES) |
+| `taskType` | Keyword buckets: code, math, creative, agentic |
+| `contextLength` | Votes `long_context` past `longChars` |
+| `toolsNeeded` | Images → vision veto; files/URLs/@agents → votes |
+| `pii` | PII/credential detection → veto to `private` (`action`, `types`) |
+| `rules` | Your regexes: votes or vetoes — top priority |
+| `bert` | Optional local zero-shot classification (`npm i @huggingface/transformers`) |
+| `custom` | Your own signal modules via `paths` |
 
 ```jsonc
-"rules": {
-  "enabled": true,
-  "weight": 3,
-  "list": [
-    // veto: short-circuits ALL other signals (even PII)
-    { "name": "prod-guard", "match": "\\bprod(uction)?\\b", "route": "reasoning", "veto": true },
-    // soft: casts a weighted vote
-    { "name": "k8s", "match": "kubernetes|helm", "route": "code", "weight": 2, "flags": "i" }
-  ]
-}
+"rules": { "list": [
+  { "name": "prod-guard", "match": "\\bprod(uction)?\\b", "route": "reasoning", "veto": true },
+  { "name": "k8s", "match": "kubernetes|helm", "route": "code" }
+] }
 ```
-
-### BERT classifier (optional)
-
-Runs a zero-shot model **locally** with transformers.js:
-
-```bash
-npm i @huggingface/transformers   # in the plugin directory
-```
-
-```jsonc
-"bert": { "enabled": true, "model": "Xenova/distilbert-base-uncased-mnli", "weight": 1.5 }
-```
-
-The first use downloads the model weights (~260 MB for the default MNLI model). If the dependency is missing, the signal disables itself with a warning — routing keeps working.
-
-### Custom signal plugins
-
-Point `signals.custom.paths` at JS/TS modules (relative to the project root or absolute). A signal receives the same context as built-ins and returns votes or a veto:
 
 ```ts
-// .opencode/signals/security.ts
+// .opencode/signals/security.ts  →  "custom": { "paths": [".opencode/signals/security.ts"] }
 export default function ({ text }) {
-  if (/\b(jwt|oauth|saml|oidc)\b/i.test(text)) {
-    return { votes: { code: 0.8, reasoning: 0.4 }, reason: "auth domain" }
-  }
-  return null
+  return /\b(jwt|oauth|oidc)\b/i.test(text) ? { votes: { code: 0.8 }, reason: "auth domain" } : null
 }
 ```
-
-```jsonc
-"custom": { "enabled": true, "weight": 1, "paths": [".opencode/signals/security.ts"] }
-```
-
-Broken modules are skipped with a warning; they can never break routing.
 
 ## Decision log
 
-Every decision is appended as one JSON line (default: `~/.local/state/opencode/llm-router/decisions.jsonl`, `%LOCALAPPDATA%\opencode\llm-router\decisions.jsonl` on Windows):
-
-```json
-{"ts":"2026-07-25T10:15:30.000Z","sessionID":"ses_…","agent":"build","action":"route","mode":"auto","category":"private","from":"anthropic/claude-sonnet-4-5","to":"ollama/qwen3:8b","confidence":1,"reason":"PII detected (email, credit_card) — routing to a private model","vetoedBy":"pii","classifierUsed":false,"scores":{},"signals":[{"name":"pii","reason":"PII: email, credit_card"}],"latencyMs":1}
-```
-
-**The log never contains prompt text** — only categories, models, scores, detector names and timings. Disable with `"log": { "enabled": false }`.
+One JSON line per decision at `~/.local/state/opencode/llm-router/decisions.jsonl` (`%LOCALAPPDATA%\opencode\llm-router\decisions.jsonl` on Windows). **It never contains prompt text** — only categories, models, scores, detector names and timings. `/router status` summarizes it for you.
 
 ## FAQ
 
-**Does it slow down my prompts?**
-Local signals take microseconds. The small AI is only called when heuristics disagree (`when: "uncertain"`), with a 4 s timeout and a result cache — obvious messages never wait.
+**Does it slow down my prompts?** Local signals take microseconds. The small AI only runs when heuristics disagree, with a timeout and a result cache.
 
-**What happens if the classifier is down / the key is wrong?**
-Nothing bad. The call fails, heuristics decide, and if they're not confident either, your chosen model stays.
+**What if the classifier fails or a model disappears?** That decision falls back to heuristics; low confidence keeps your model. Routes re-resolve against the live catalog every time, so rotated/removed models are skipped automatically.
 
-**What if I hate a routing decision mid-session?**
-Pick a model variant explicitly — `respectVariant: true` makes the router step aside. Or add the agent to `skipAgents`, set the category route to `"keep"`, or flip to `"mode": "suggest"`.
+**How do I route EVERY mode, not just auto-router?** `"onlyAgents": []`.
 
-**Can I use it without the small AI?**
-Yes — `"classifier": { "enabled": false }` gives you a pure heuristic/rules router. You can also invert it: disable local signals and route on the classifier alone.
+**How do I go full manual on one category?** Set it to an exact model (`"code": "opencode-go/kimi-k3"`) or `"keep"`.
 
-**Does it work with any provider?**
-Routes use opencode's `provider/modelID` format, so any provider connected in opencode works. The classifier only needs an OpenAI-compatible chat endpoint.
+**Is the `private` route really private?** Only if you point it at a local model (e.g. `"ollama/qwen3:8b"`). The default uses free zen models — same cloud the rest of your chat already goes to, never a *new* destination.
 
 ## Development
 
 ```bash
 npm install
-npm run typecheck   # tsc --noEmit
-npm test            # node:test, 50 unit tests
+npm run typecheck
+npm test          # 70 unit tests (node:test)
 ```
 
-The core engine (`src/router.ts`, `src/signals/*`, `src/classifier.ts`) has no opencode dependencies and is fully unit-tested; `src/index.ts` is a thin adapter over the plugin hooks.
-
-## Contributing
-
-Issues and PRs are welcome. Please add tests for new signals and keep the plugin dependency-free (optional peer deps for ML are fine).
+The engine (`src/router.ts`, `src/signals/*`, `src/classifier.ts`, `src/opencode-backend.ts`) has no opencode dependencies and is fully unit-tested; `src/index.ts` is a thin adapter over the plugin hooks.
 
 ## License
 

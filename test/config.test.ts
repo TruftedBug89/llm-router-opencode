@@ -45,14 +45,23 @@ test("defaults are sane", () => {
   assert.equal(DEFAULT_CONFIG.signals.bert.enabled, false)
 })
 
-test("defaults target the opencode catalog with fallback chains", () => {
+test("defaults use dynamic catalog selectors, not hardcoded model IDs", () => {
   assert.equal(DEFAULT_CONFIG.classifier.source, "opencode")
-  assert.ok(Array.isArray(DEFAULT_CONFIG.classifier.model))
-  assert.ok((DEFAULT_CONFIG.classifier.model as string[]).every((m) => m.startsWith("opencode/")))
+  const classifierModel = DEFAULT_CONFIG.classifier.model
+  assert.ok(typeof classifierModel === "object" && !Array.isArray(classifierModel) && "auto" in classifierModel)
+  assert.equal(classifierModel.auto.freeOnly, true)
+
   assert.deepEqual(DEFAULT_CONFIG.onlyAgents, ["auto-router"])
   assert.ok(DEFAULT_CONFIG.skipAgents.includes("llm-router-classifier"))
-  // every built-in category has a route out of the box
+
+  // every built-in category has a dynamic route out of the box, no fixed IDs
   for (const category of ["trivial", "simple", "code", "reasoning", "creative", "vision", "agentic", "long_context", "private"]) {
-    assert.ok(DEFAULT_CONFIG.routes[category], `missing default route for ${category}`)
+    const route = DEFAULT_CONFIG.routes[category]
+    assert.ok(route, `missing default route for ${category}`)
+    const target = typeof route === "string" ? route : Array.isArray(route) ? route : route.model
+    assert.ok(
+      typeof target === "object" && !Array.isArray(target) && "auto" in target,
+      `route "${category}" should be a dynamic selector, got ${JSON.stringify(target)}`,
+    )
   }
 })

@@ -29,7 +29,7 @@ import {
 } from "./config.ts"
 import { classifyViaEndpoint } from "./classifier.ts"
 import { classifyViaOpencode, isClassifierSession, type OpencodeClientLike } from "./opencode-backend.ts"
-import { decide, resolveModel } from "./router.ts"
+import { decide, normalizeRouteTarget, resolveModel } from "./router.ts"
 import { runLocalSignals } from "./signals/index.ts"
 import { createCapabilities } from "./capabilities.ts"
 import { DecisionLogger, defaultStateDir } from "./log.ts"
@@ -100,7 +100,10 @@ function fmt(model: { providerID: string; modelID: string }): string {
   return `${model.providerID}/${model.modelID}`
 }
 
-function modelChainLabel(model: string | string[]): string {
+function modelChainLabel(model: RouterConfig["classifier"]["model"]): string {
+  if (typeof model === "object" && !Array.isArray(model) && "auto" in model) {
+    return `auto(${model.auto.prefer?.join("|") ?? "any"}${model.auto.freeOnly ? ", free" : ""})`
+  }
   return Array.isArray(model) ? model.join(" → ") : model
 }
 
@@ -114,19 +117,30 @@ const plugin: Plugin = async ({ client, directory, worktree }, options) => {
     if (config.debug) console.log(`[llm-router] ${message}`)
   }
 
-  // -- resolve the classifier model chain once at startup -------------------
+  // -- resolve the classifier model once at startup -------------------------
   let classifierModel: ModelRef | null = null
-  if (config.classifier.enabled && config.classifier.source === "opencode") {
-    classifierModel = resolveModel(config.classifier.model, capabilities.lookup)?.model ?? null
+  let classifierEnabled = config.classifier.enabled
+  if (classifierEnabled && config.classifier.source === "opencode") {
+    classifierModel = resolveModel(config.classifier.model, capabilities.lookup, capabilities.list)?.model ?? null
     if (!classifierModel) {
       console.warn(
-        `[llm-router] none of the classifier models is available (${modelChainLabel(config.classifier.model)}); classifier disabled`,
+        `[llm-router] no classifier model available (${modelChainLabel(config.classifier.model)}); classifier disabled`,
       )
+      classifierEnabled = false
     }
+  }
+  if (
+    classifierEnabled &&
+    config.classifier.source === "endpoint" &&
+    typeof config.classifier.model === "object" &&
+    !Array.isArray(config.classifier.model)
+  ) {
+    console.warn(`[llm-router] classifier { auto } selectors require source "opencode"; classifier disabled`)
+    classifierEnabled = false
   }
 
   const classifyFn =
-    !config.classifier.enabled || (config.classifier.source === "opencode" && !classifierModel)
+    !classifierEnabled || (config.classifier.source === "opencode" && !classifierModel)
       ? undefined
       : config.classifier.source === "opencode"
         ? (text: string, cfg: RouterConfig["classifier"]) =>
@@ -137,9 +151,9 @@ const plugin: Plugin = async ({ client, directory, worktree }, options) => {
   if (config.mode !== "off") {
     const resolvedRoutes = Object.entries(config.routes)
       .map(([category, route]) => {
-        const target = typeof route === "string" ? route : route.model
+        const target = normalizeRouteTarget(route).model
         if (target === "keep") return `${category}=keep`
-        const resolved = resolveModel(target, capabilities.lookup)
+        const resolved = resolveModel(target, capabilities.lookup, capabilities.list)
         return resolved ? `${category}=${fmt(resolved.model)}` : `${category}=UNAVAILABLE`
       })
       .join(" ")
@@ -211,7 +225,7 @@ const plugin: Plugin = async ({ client, directory, worktree }, options) => {
     let decision: Decision
     try {
       const outcomes = await runLocalSignals(ctx)
-      decision = await decide({ ctx, outcomes, classifyFn, capabilities: capabilities.lookup })
+      decision = await decide({ ctx, outcomes, classifyFn, capabilities: capabilities.lookup, catalog: capabilities.list })
     } catch (err) {
       // fail open: never touch the message if the engine blows up
       console.warn(`[llm-router] routing failed (${err instanceof Error ? err.message : String(err)}); keeping current model`)

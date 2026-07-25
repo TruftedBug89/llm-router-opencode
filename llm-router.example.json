@@ -2,77 +2,84 @@
   // ==========================================================================
   // opencode-llm-router — example configuration (JSONC: comments allowed)
   //
-  // Copy this file to one of:
-  //   global:  ~/.config/opencode/llm-router.json
-  //   project: <your-project>/.opencode/llm-router.json
-  // Then edit the `routes` models to providers YOU have connected in opencode.
+  // Copy to:   ~/.config/opencode/llm-router.json        (global)
+  //       or   <project>/.opencode/llm-router.json       (per project)
+  //
+  // GOOD NEWS: you probably don't need this file at all. The defaults are
+  // DYNAMIC — every route is an { auto } selector resolved against YOUR live
+  // opencode catalog (zen free models, Go catalog, anything you connect).
+  // Model lists rotate? The router re-resolves every time. Nothing rots.
+  //
+  // This file documents every knob. Delete what you don't touch.
   // ==========================================================================
 
-  // "suggest" only shows what it WOULD do (safe evaluation).
-  // Switch to "auto" to actually reroute, "off" to disable.
-  "mode": "suggest",
+  // "suggest" shows what it WOULD route (safe evaluation) · "auto" reroutes · "off" disables
+  "mode": "auto",
 
-  // Show a TUI toast on every routing decision.
+  // Routing only happens in these agents. Default ["auto-router"]: Tab to the
+  // "auto-router" mode (a build clone) to use it. Set [] to route EVERY agent.
+  "onlyAgents": ["auto-router"],
+
+  // Show a TUI toast on each decision · respect explicit model variant picks
   "notify": true,
-
-  // If you explicitly pick a model variant (e.g. "high" reasoning effort),
-  // the router respects it and steps aside.
   "respectVariant": true,
 
-  // Winner's normalized vote share required to reroute. Below: keep your model.
+  // Winner's normalized vote share needed to reroute (below: keep your model)
   "minConfidence": 0.4,
 
-  // Agents that are never rerouted.
-  "skipAgents": [],
+  // -------------------------------------------------------------------------
+  // ROUTES — category -> target. Three ways to point at models:
+  //
+  //   "opencode/big-pickle"                          exact model
+  //   ["opencode-go/kimi-k3", "opencode/big-pickle"] fallback chain
+  //   { "model": { "auto": { ... } } }               dynamic selector (default)
+  //   "keep"                                         never change the model
+  //
+  // Selector fields: prefer (ordered regexes over id+name), freeOnly,
+  // providers (priority order), vision, minContext, pick (first|largest|smallest)
+  // Add "params" to any object route for sampling overrides.
+  // -------------------------------------------------------------------------
+  "routes": {
+    "trivial": { "model": { "auto": { "freeOnly": true, "prefer": ["nano", "mini", "flash", "pickle"] } } },
+    "simple": { "model": { "auto": { "freeOnly": true } } },
+    "code": { "model": { "auto": { "providers": ["opencode-go", "opencode"], "prefer": ["code", "kimi", "glm"] } } },
+    "reasoning": {
+      "model": { "auto": { "providers": ["opencode-go", "opencode"], "prefer": ["k3", "ultra", "max", "pro"] } },
+      "params": { "temperature": 0.1 }
+    },
+    "creative": { "model": { "auto": { "providers": ["opencode-go", "opencode"], "prefer": ["plus", "pro", "qwen"] } } },
+    "vision": { "model": { "auto": { "vision": true } } },
+    "agentic": { "model": { "auto": { "providers": ["opencode-go", "opencode"], "prefer": ["code", "kimi"] } } },
+    "long_context": { "model": { "auto": { "pick": "largest" } } },
+
+    // PII/credentials detected -> routed here. Free zen models are still
+    // CLOUD models; for real privacy use a local one, e.g. "ollama/qwen3:8b".
+    "private": { "model": { "auto": { "freeOnly": true } } }
+  },
 
   // -------------------------------------------------------------------------
-  // THE SMALL AI — classifies ambiguous prompts with a fast, cheap model.
-  // Any OpenAI-compatible endpoint works: OpenRouter, Ollama, LM Studio, vLLM…
-  // PRIVACY: the (truncated) prompt text is sent to this endpoint.
-  // Point it at a local Ollama for 100% local classification.
+  // THE SMALL AI — classifies ambiguous prompts. By default it runs on a
+  // model from YOUR opencode catalog (source "opencode") — no API keys, no
+  // external calls beyond what opencode already does.
   // -------------------------------------------------------------------------
   "classifier": {
     "enabled": true,
-    "baseURL": "https://openrouter.ai/api/v1",
-    "apiKeyEnv": "OPENROUTER_API_KEY", // or "apiKey": "{env:OPENROUTER_API_KEY}"
-    "model": "google/gemini-2.5-flash-lite",
-    "timeoutMs": 4000,
-    "maxChars": 4000,
+    "source": "opencode",
+    "model": { "auto": { "freeOnly": true, "prefer": ["nano", "mini", "flash", "pickle"] } },
+    "when": "uncertain", // only call it when heuristics disagree
     "weight": 2,
-    // "uncertain": only call it when heuristics disagree (recommended).
-    // "always": call it on every message.
-    "when": "uncertain",
+    "timeoutMs": 6000,
     "cacheTtlMinutes": 60
 
-    // --- Fully local alternative (Ollama) ---
+    // --- Advanced: raw OpenAI-compatible endpoint instead (Ollama, OpenRouter…)
+    // "source": "endpoint",
     // "baseURL": "http://localhost:11434/v1",
     // "apiKey": "ollama",
-    // "model": "qwen3:4b",
+    // "model": "qwen3:4b"
   },
 
   // -------------------------------------------------------------------------
-  // ROUTES — category -> model. Use "keep" (or omit the category) to leave
-  // the message on your currently selected model.
-  // EDIT THESE to match your providers! Format: "provider/modelID".
-  // -------------------------------------------------------------------------
-  "routes": {
-    "trivial": "openai/gpt-4.1-nano", // greetings, "thanks", one-liners
-    "simple": "openai/gpt-4.1-mini", // simple Q&A, translations, summaries
-    "code": "anthropic/claude-sonnet-4-5", // programming, debugging, config
-    "reasoning": {
-      // math, architecture, analysis — with per-category sampling params
-      "model": "openai/o3",
-      "params": { "temperature": 0.1 }
-    },
-    "creative": "anthropic/claude-opus-4-5", // stories, marketing, brainstorming
-    "vision": "openai/gpt-4.1", // prompts with images attached
-    "agentic": "anthropic/claude-sonnet-4-5", // multi-step tool use
-    "long_context": "google/gemini-2.5-pro", // huge prompts / many files
-    "private": "ollama/qwen3:8b" // PII/credentials detected -> LOCAL model
-  },
-
-  // -------------------------------------------------------------------------
-  // SIGNALS — each one votes; the router fuses all votes with these weights.
+  // SIGNALS
   // -------------------------------------------------------------------------
   "signals": {
     "complexity": { "enabled": true, "weight": 1 },
@@ -80,73 +87,26 @@
     "contextLength": { "enabled": true, "weight": 1, "longChars": 24000 },
     "toolsNeeded": { "enabled": true, "weight": 1 },
 
-    "pii": {
-      "enabled": true,
-      "action": "route", // veto into the "private" route on PII
-      "route": "private"
-      // "types": ["email", "credit_card", "aws_access_key"] // optional subset
-    },
+    "pii": { "enabled": true, "action": "route", "route": "private" },
 
     "rules": {
       "enabled": true,
       "weight": 3,
       "list": [
-        // Hard guardrails first: veto rules short-circuit everything.
-        {
-          "name": "prod-changes-get-the-smart-model",
-          "match": "\\b(production|prod)\\b.*\\b(deploy|database|migration)\\b",
-          "route": "reasoning",
-          "veto": true
-        },
-        // Soft preferences: weighted votes.
-        { "name": "k8s", "match": "kubernetes|k8s|helm", "route": "code" },
-        { "name": "spanish-copy", "match": "(redacta|escribe).*(post|artículo|tweet)", "route": "creative" }
+        // veto rules beat every other signal
+        { "name": "prod-guard", "match": "\\b(production|prod)\\b.*\\b(deploy|migration)\\b", "route": "reasoning", "veto": true },
+        { "name": "k8s", "match": "kubernetes|helm", "route": "code" }
       ]
     },
 
-    // Optional local BERT zero-shot classifier (transformers.js).
-    // Requires: npm i @huggingface/transformers   (in the plugin directory)
-    "bert": {
-      "enabled": false,
-      "model": "Xenova/distilbert-base-uncased-mnli",
-      "labels": [
-        "trivial small talk",
-        "simple question",
-        "programming or code",
-        "advanced math or logical reasoning",
-        "creative writing",
-        "multi-step task requiring tools"
-      ],
-      "labelMap": {
-        "trivial small talk": "trivial",
-        "simple question": "simple",
-        "programming or code": "code",
-        "advanced math or logical reasoning": "reasoning",
-        "creative writing": "creative",
-        "multi-step task requiring tools": "agentic"
-      },
-      "weight": 1.5,
-      "maxChars": 2000
-    },
+    // Optional local BERT zero-shot classifier (needs: npm i @huggingface/transformers)
+    "bert": { "enabled": false, "model": "Xenova/distilbert-base-uncased-mnli", "weight": 1.5 },
 
-    // Your own signal plugins: JS/TS modules exporting a function
-    // (ctx) => ({ votes: { code: 0.9 }, reason: "..." }) or null.
-    "custom": {
-      "enabled": true,
-      "weight": 1,
-      "paths": [
-        // ".opencode/signals/my-signal.ts"
-      ]
-    }
+    // Your own signal plugins: modules exporting (ctx) => ({ votes, reason } | { veto } | null)
+    "custom": { "enabled": true, "weight": 1, "paths": [] }
   },
 
-  // Decision audit log (JSONL). NEVER contains prompt text — only decisions.
-  "log": {
-    "enabled": true
-    // "path": "C:/logs/llm-router.jsonl",
-    // "maxBytes": 5242880
-  },
-
-  // Verbose console logging of every decision.
+  // Decision audit log (JSONL, never contains prompt text)
+  "log": { "enabled": true },
   "debug": false
 }

@@ -1,30 +1,43 @@
 /**
- * Model capability lookup.
+ * Live model capability catalog.
  *
  * Queries the running opencode server for its provider/model catalog and
- * normalizes context-window sizes and image-input support. Used for
- * capability-aware routing decisions (e.g. don't reroute to a vision model
- * when the current one already sees images; don't reroute to a long-context
- * model when the current one already fits).
+ * normalizes per-model metadata: context window, image input, cost (free
+ * tier detection), lifecycle status and display name.
  *
- * The catalog call is best-effort: any failure yields an empty lookup and
- * the router simply skips capability checks.
+ * opencode model lists rotate frequently (zen free models come and go), so
+ * the catalog REFRESHES ITSELF lazily in the background whenever it is
+ * older than `ttlMs` — routing decisions always see a fresh model list
+ * without ever blocking on a refetch.
+ *
+ * The catalog call is best-effort: any failure yields an empty catalog and
+ * capability checks become no-ops.
  */
 
-import type { CapabilitiesLookup, ModelCapabilities, ModelRef } from "./types.ts"
+import type { CapabilitiesLookup, CatalogEntry, CatalogLister, ModelCapabilities, ModelRef } from "./types.ts"
 
 export interface Capabilities {
   lookup: CapabilitiesLookup
+  list: CatalogLister
   /** Number of models discovered (0 = catalog unavailable). */
-  size: number
+  readonly size: number
+  /** Force a reload. */
+  refresh(): Promise<void>
 }
 
+const DEFAULT_TTL_MS = 60_000
+
 interface RawModel {
+  id?: string
+  name?: string
+  status?: string
   limit?: { context?: number; output?: number }
+  cost?: { input?: number; output?: number }
+  capabilities?: { input?: { image?: boolean } }
+  // fallback shapes seen in the wild
   context_length?: number
   contextWindow?: number
   modalities?: { input?: string[] }
-  capabilities?: { vision?: boolean }
   vision?: boolean
   architecture?: { input_modalities?: string[] }
 }
@@ -41,17 +54,28 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function normalizeModel(raw: RawModel): ModelCapabilities {
-  const contextLimit =
-    raw.limit?.context ?? raw.context_length ?? raw.contextWindow ?? undefined
-  const inputs = raw.modalities?.input ?? raw.architecture?.input_modalities
+  const contextLimit = raw.limit?.context ?? raw.context_length ?? raw.contextWindow ?? undefined
+
+  const modalityInputs = raw.modalities?.input ?? raw.architecture?.input_modalities
   const imageInput =
-    (Array.isArray(inputs) && inputs.includes("image")) ||
-    raw.capabilities?.vision === true ||
-    raw.vision === true ||
+    raw.capabilities?.input?.image ??
+    (Array.isArray(modalityInputs) && modalityInputs.includes("image") ? true : undefined) ??
+    raw.vision ??
     undefined
+
+  const inputCost = raw.cost?.input
+  const outputCost = raw.cost?.output
+  const free =
+    typeof inputCost === "number" && typeof outputCost === "number"
+      ? inputCost === 0 && outputCost === 0
+      : undefined
+
   return {
     contextLimit: typeof contextLimit === "number" ? contextLimit : undefined,
-    imageInput,
+    imageInput: imageInput === true ? true : imageInput === false ? false : undefined,
+    free,
+    status: typeof raw.status === "string" ? raw.status : undefined,
+    name: typeof raw.name === "string" ? raw.name : undefined,
     exists: true,
   }
 }
@@ -67,41 +91,76 @@ function extractProviders(payload: unknown): RawProvider[] {
   return []
 }
 
-function collect(payload: unknown, map: Map<string, ModelCapabilities>): void {
+/** Parse a provider-list payload into a catalog map. Exported for tests. */
+export function normalizeCatalog(payload: unknown): Map<string, ModelCapabilities> {
+  const map = new Map<string, ModelCapabilities>()
   for (const provider of extractProviders(payload)) {
     const providerID = provider.id
     if (!providerID || !provider.models) continue
     const models = Array.isArray(provider.models)
-      ? provider.models.map((m, i) => [String((m as { id?: string }).id ?? i), m] as const)
+      ? provider.models.map((m, i) => [String(m.id ?? i), m] as const)
       : Object.entries(provider.models)
     for (const [modelID, raw] of models) {
       map.set(`${providerID}/${modelID}`, normalizeModel(raw))
     }
   }
+  return map
 }
 
-/**
- * Build the lookup. `client` is the opencode SDK client; kept as `unknown`
- * here so a catalog-shape change can never break the plugin at runtime.
- */
-export async function createCapabilities(client: unknown): Promise<Capabilities> {
-  const map = new Map<string, ModelCapabilities>()
-  try {
-    const providerApi = asRecord(client)?.["provider"] as
-      | { list?: (args?: unknown) => Promise<unknown> }
-      | undefined
-    if (providerApi?.list) {
-      const result = await providerApi.list()
-      collect(result, map)
+export async function createCapabilities(client: unknown, ttlMs: number = DEFAULT_TTL_MS): Promise<Capabilities> {
+  let map = new Map<string, ModelCapabilities>()
+  let loadedAt = 0
+  let refreshing = false
+
+  const doRefresh = async (): Promise<void> => {
+    if (refreshing) return
+    refreshing = true
+    try {
+      const providerApi = asRecord(client)?.["provider"] as
+        | { list?: (args?: unknown) => Promise<unknown> }
+        | undefined
+      if (providerApi?.list) {
+        const result = await providerApi.list()
+        const fresh = normalizeCatalog(result)
+        if (fresh.size > 0) {
+          map = fresh
+          loadedAt = Date.now()
+        }
+      }
+    } catch {
+      // catalog unavailable — capability checks become no-ops
+    } finally {
+      refreshing = false
     }
-  } catch {
-    // catalog unavailable — capability checks become no-ops
+  }
+
+  await doRefresh()
+
+  const maybeRefresh = (): void => {
+    if (map.size > 0 && Date.now() - loadedAt > ttlMs) void doRefresh()
   }
 
   const lookup: CapabilitiesLookup = (ref: ModelRef) => {
+    maybeRefresh()
     if (map.size === 0) return undefined
     const hit = map.get(`${ref.providerID}/${ref.modelID}`)
     return hit ?? { exists: false }
   }
-  return { lookup, size: map.size }
+
+  const list: CatalogLister = () => {
+    maybeRefresh()
+    return [...map.entries()].map(([key, caps]) => {
+      const slash = key.indexOf("/")
+      return { providerID: key.slice(0, slash), modelID: key.slice(slash + 1), caps }
+    })
+  }
+
+  return {
+    lookup,
+    list,
+    get size() {
+      return map.size
+    },
+    refresh: doRefresh,
+  }
 }

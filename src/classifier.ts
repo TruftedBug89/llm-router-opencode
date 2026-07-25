@@ -128,7 +128,15 @@ export interface ClassifierCall {
 export async function classifyViaEndpoint(text: string, cfg: ClassifierConfig): Promise<ClassifierCall> {
   const started = Date.now()
   const truncated = text.slice(0, cfg.maxChars)
-  const key = cacheKey(truncated, Array.isArray(cfg.model) ? cfg.model.join(",") : cfg.model)
+  const configured = cfg.model
+  const modelName = typeof configured === "string" ? configured : Array.isArray(configured) ? configured[0] : undefined
+  if (!modelName) {
+    return { ok: false, cached: false, latencyMs: Date.now() - started, error: "no concrete classifier model configured" }
+  }
+  const key = cacheKey(
+    truncated,
+    typeof configured === "string" ? configured : Array.isArray(configured) ? configured.join(",") : JSON.stringify(configured),
+  )
 
   const cached = cacheGet(key)
   if (cached) return { ok: true, classification: cached, cached: true, latencyMs: Date.now() - started }
@@ -143,7 +151,7 @@ export async function classifyViaEndpoint(text: string, cfg: ClassifierConfig): 
   }
 
   const body = {
-    model: Array.isArray(cfg.model) ? cfg.model[0] : cfg.model,
+    model: modelName,
     messages: [
       { role: "system", content: cfg.systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
       { role: "user", content: truncated },

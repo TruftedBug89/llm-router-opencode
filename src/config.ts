@@ -26,21 +26,24 @@ export const ROUTER_COMMAND = "router"
 
 export const DEFAULT_CONFIG: RouterConfig = {
   mode: "auto",
-  // Default routes target the opencode catalog: Go subscription models first,
-  // then zen, then zen FREE models — the first model available in YOUR catalog
-  // wins, so this works out of the box with zero configuration.
+  // Default routes are DYNAMIC: each { auto } selector is resolved against
+  // your live opencode catalog on every decision (zen free models rotate, Go
+  // catalog grows — nothing is hardcoded). Free models serve trivial/simple/
+  // private; your best available models serve code/reasoning/creative.
   routes: {
-    trivial: ["opencode/mimo-v2.5-free", "opencode/big-pickle", "opencode/deepseek-v4-flash-free"],
-    simple: ["opencode/big-pickle", "opencode/mimo-v2.5-free", "opencode/deepseek-v4-flash-free"],
-    code: ["opencode-go/kimi-k2.7-code", "opencode/kimi-k2.7-code", "opencode/big-pickle"],
-    reasoning: ["opencode-go/kimi-k3", "opencode/kimi-k2.6", "opencode/nemotron-3-ultra-free"],
-    creative: ["opencode-go/qwen3.7-plus", "opencode/glm-5.1", "opencode/big-pickle"],
-    vision: ["opencode-go/mimo-v2.5", "opencode-go/kimi-k2.5"],
-    agentic: ["opencode-go/kimi-k2.7-code", "opencode/kimi-k2.7-code", "opencode/big-pickle"],
-    long_context: ["opencode/nemotron-3-ultra-free", "opencode-go/mimo-v2.5", "opencode/mimo-v2.5-free"],
-    // NOTE: free zen models are still cloud models. For true privacy point this
-    // at a local model, e.g. "ollama/qwen3:8b".
-    private: ["opencode/mimo-v2.5-free", "opencode/big-pickle"],
+    trivial: { model: { auto: { freeOnly: true, prefer: ["nano", "mini", "flash", "lite", "pickle", "small"] } } },
+    simple: { model: { auto: { freeOnly: true, prefer: ["pickle", "flash", "mini", "mimo"] } } },
+    code: { model: { auto: { providers: ["opencode-go", "opencode"], prefer: ["code", "coder", "kimi", "glm", "sonnet"] } } },
+    reasoning: {
+      model: { auto: { providers: ["opencode-go", "opencode"], prefer: ["k3", "k2\\.6", "ultra", "max", "pro", "reason"] } },
+    },
+    creative: { model: { auto: { providers: ["opencode-go", "opencode"], prefer: ["plus", "pro", "glm", "qwen", "kimi"] } } },
+    vision: { model: { auto: { vision: true, providers: ["opencode-go", "opencode"] } } },
+    agentic: { model: { auto: { providers: ["opencode-go", "opencode"], prefer: ["code", "coder", "kimi", "glm", "sonnet"] } } },
+    long_context: { model: { auto: { pick: "largest" } } },
+    // NOTE: free zen models are still cloud models. For true privacy point
+    // this at a local model, e.g. { "model": "ollama/qwen3:8b" }.
+    private: { model: { auto: { freeOnly: true } } },
   },
   minConfidence: 0.4,
   onlyAgents: [ROUTER_AGENT],
@@ -50,7 +53,8 @@ export const DEFAULT_CONFIG: RouterConfig = {
   classifier: {
     enabled: true,
     source: "opencode",
-    model: ["opencode/big-pickle", "opencode/mimo-v2.5-free", "opencode/deepseek-v4-flash-free"],
+    // dynamic: cheapest free model in YOUR catalog, re-resolved live
+    model: { auto: { freeOnly: true, prefer: ["nano", "mini", "flash", "lite", "pickle", "small"] } },
     baseURL: "https://openrouter.ai/api/v1",
     apiKeyEnv: "OPENROUTER_API_KEY",
     timeoutMs: 6000,
