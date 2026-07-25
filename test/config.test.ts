@@ -44,3 +44,15 @@ test("defaults are sane", () => {
   assert.equal(DEFAULT_CONFIG.signals.pii.route, "private")
   assert.equal(DEFAULT_CONFIG.signals.bert.enabled, false)
 })
+
+test("defaults target the opencode catalog with fallback chains", () => {
+  assert.equal(DEFAULT_CONFIG.classifier.source, "opencode")
+  assert.ok(Array.isArray(DEFAULT_CONFIG.classifier.model))
+  assert.ok((DEFAULT_CONFIG.classifier.model as string[]).every((m) => m.startsWith("opencode/")))
+  assert.deepEqual(DEFAULT_CONFIG.onlyAgents, ["auto-router"])
+  assert.ok(DEFAULT_CONFIG.skipAgents.includes("llm-router-classifier"))
+  // every built-in category has a route out of the box
+  for (const category of ["trivial", "simple", "code", "reasoning", "creative", "vision", "agentic", "long_context", "private"]) {
+    assert.ok(DEFAULT_CONFIG.routes[category], `missing default route for ${category}`)
+  }
+})

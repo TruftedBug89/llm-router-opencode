@@ -16,7 +16,7 @@
 import { createHash } from "node:crypto"
 import type { Classification, ClassifierConfig } from "./types.ts"
 
-const DEFAULT_SYSTEM_PROMPT = `You are a request classifier for an LLM routing system. Analyze the user message and reply with ONLY a minified JSON object, no markdown, no prose:
+export const DEFAULT_SYSTEM_PROMPT = `You are a request classifier for an LLM routing system. Analyze the user message and reply with ONLY a minified JSON object, no markdown, no prose:
 {"task_type":"...","complexity":N,"needs_tools":B,"contains_pii":B,"reason":"..."}
 
 task_type: one of "chat" (greetings/small talk), "question" (simple factual Q&A), "code" (programming, debugging, config, CLI), "math" (math, logic, formal reasoning), "creative" (writing, brainstorming, marketing), "translation", "summary", "agentic" (multi-step tasks needing tools: run/install/search/edit files), "vision" (about attached images), "other".
@@ -33,11 +33,11 @@ interface CacheEntry {
 const MAX_CACHE_ENTRIES = 512
 const cache = new Map<string, CacheEntry>()
 
-function cacheKey(text: string, model: string): string {
+export function cacheKey(text: string, model: string): string {
   return createHash("sha256").update(`${model}::${text}`).digest("hex")
 }
 
-function cacheGet(key: string): Classification | null {
+export function cacheGet(key: string): Classification | null {
   const hit = cache.get(key)
   if (!hit) return null
   if (hit.expires < Date.now()) {
@@ -47,7 +47,7 @@ function cacheGet(key: string): Classification | null {
   return hit.value
 }
 
-function cacheSet(key: string, value: Classification, ttlMs: number): void {
+export function cacheSet(key: string, value: Classification, ttlMs: number): void {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     // drop the oldest quarter
     const keys = [...cache.keys()].slice(0, MAX_CACHE_ENTRIES / 4)
@@ -124,10 +124,11 @@ export interface ClassifierCall {
   error?: string
 }
 
-export async function classify(text: string, cfg: ClassifierConfig): Promise<ClassifierCall> {
+/** Classify by calling an OpenAI-compatible HTTP endpoint directly. */
+export async function classifyViaEndpoint(text: string, cfg: ClassifierConfig): Promise<ClassifierCall> {
   const started = Date.now()
   const truncated = text.slice(0, cfg.maxChars)
-  const key = cacheKey(truncated, cfg.model)
+  const key = cacheKey(truncated, Array.isArray(cfg.model) ? cfg.model.join(",") : cfg.model)
 
   const cached = cacheGet(key)
   if (cached) return { ok: true, classification: cached, cached: true, latencyMs: Date.now() - started }
@@ -142,7 +143,7 @@ export async function classify(text: string, cfg: ClassifierConfig): Promise<Cla
   }
 
   const body = {
-    model: cfg.model,
+    model: Array.isArray(cfg.model) ? cfg.model[0] : cfg.model,
     messages: [
       { role: "system", content: cfg.systemPrompt ?? DEFAULT_SYSTEM_PROMPT },
       { role: "user", content: truncated },

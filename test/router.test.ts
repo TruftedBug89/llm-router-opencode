@@ -177,11 +177,49 @@ test("unavailable route target keeps the current model", async () => {
     capabilities: (ref) => (ref.modelID === "o3" ? { exists: false } : { exists: true }),
   })
   assert.equal(decision.action, "keep")
-  assert.match(decision.reason, /not available/)
+  assert.match(decision.reason, /no available model/)
+})
+
+test("fallback chain picks the first available candidate", async () => {
+  const config = makeConfig({
+    routes: { code: ["opencode-go/kimi-k2.7-code", "opencode/kimi-k2.7-code", "opencode/big-pickle"] },
+  })
+  const ctx = makeCtx(config)
+  const capabilities = (ref: { providerID: string; modelID: string }) =>
+    ref.providerID === "opencode-go" ? { exists: false } : { exists: true }
+  const decision = await decide({
+    ctx,
+    outcomes: [outcome("task-type", 1, { votes: { code: 1 } })],
+    capabilities,
+  })
+  assert.equal(decision.action, "route")
+  assert.deepEqual(decision.model, { providerID: "opencode", modelID: "kimi-k2.7-code" })
+  assert.match(decision.reason, /fell back/)
+})
+
+test("chain without a catalog uses the first candidate optimistically", async () => {
+  const config = makeConfig({ routes: { code: ["opencode-go/kimi-k2.7-code", "opencode/big-pickle"] } })
+  const ctx = makeCtx(config)
+  const decision = await decide({ ctx, outcomes: [outcome("task-type", 1, { votes: { code: 1 } })] })
+  assert.equal(decision.action, "route")
+  assert.deepEqual(decision.model, { providerID: "opencode-go", modelID: "kimi-k2.7-code" })
+})
+
+test("all candidates unavailable keeps the model", async () => {
+  const config = makeConfig({ routes: { code: ["a/x", "b/y"] } })
+  const ctx = makeCtx(config)
+  const decision = await decide({
+    ctx,
+    outcomes: [outcome("task-type", 1, { votes: { code: 1 } })],
+    capabilities: () => ({ exists: false }),
+  })
+  assert.equal(decision.action, "keep")
+  assert.match(decision.reason, /no available model/)
 })
 
 test("category without a configured route keeps the current model", async () => {
-  const config = makeConfig({ routes: { code: "anthropic/claude-sonnet-4-5" } })
+  const config = makeConfig()
+  config.routes = { code: "anthropic/claude-sonnet-4-5" } // wipe defaults: only "code" routed
   const ctx = makeCtx(config)
   const decision = await decide({
     ctx,

@@ -50,10 +50,41 @@ export interface RouteParams {
   options?: Record<string, unknown>
 }
 
-/** A route maps a category to a target model (or "keep") plus optional params. */
+/**
+ * Dynamic model selection against the LIVE opencode catalog. Model lists
+ * rotate frequently (especially zen free models), so instead of hardcoding
+ * IDs you describe what you want and the router picks it fresh.
+ */
+export interface ModelSelector {
+  /**
+   * Ordered case-insensitive regexes matched against "provider/modelID" and
+   * the model's display name. The first regex with any match wins.
+   */
+  prefer?: string[]
+  /** Only zero-cost models (zen free tier). */
+  freeOnly?: boolean
+  /** Restrict to these providers; earlier entries are preferred. */
+  providers?: string[]
+  /** Require image-input support. */
+  vision?: boolean
+  /** Minimum context window in tokens. */
+  minContext?: number
+  /** Among matches: "first" (catalog order), "largest" or "smallest" context window. Default "first". */
+  pick?: "first" | "largest" | "smallest"
+}
+
+/**
+ * What a route (or the classifier) can point at:
+ *   - "provider/modelID"      exact model
+ *   - ["a/x", "b/y"]          fallback chain, first available wins
+ *   - { auto: ModelSelector } dynamic pick from the live catalog
+ *   - "keep"                  leave the user's model untouched
+ */
+export type RouteModel = string | string[] | { auto: ModelSelector }
+
+/** A route maps a category to a target model plus optional params. */
 export interface RouteTarget {
-  /** "provider/modelID", or "keep" to leave the user's model untouched. */
-  model: string
+  model: RouteModel
   params?: RouteParams
 }
 
@@ -77,17 +108,28 @@ export interface CustomRule {
 
 export interface ClassifierConfig {
   enabled: boolean
-  /** OpenAI-compatible base URL, e.g. https://openrouter.ai/api/v1 or http://localhost:11434/v1 */
+  /**
+   * "opencode": classify with a model from your own opencode catalog
+   * (zen / go / free models — no extra API keys, fully managed).
+   * "endpoint": call any OpenAI-compatible HTTP endpoint directly.
+   * Default "opencode".
+   */
+  source: "opencode" | "endpoint"
+  /**
+   * Small/fast model used for classification. Same forms as routes:
+   * exact "provider/modelID", fallback chain, or { auto: selector }.
+   * Default: { auto } — the cheapest free model in your catalog.
+   */
+  model: RouteModel
+  /** [source: endpoint] OpenAI-compatible base URL. */
   baseURL: string
-  /** API key. Supports "{env:VAR_NAME}" interpolation. */
+  /** [source: endpoint] API key. Supports "{env:VAR_NAME}" interpolation. */
   apiKey?: string
-  /** Convenience: name of the env var holding the API key. */
+  /** [source: endpoint] Convenience: name of the env var holding the API key. */
   apiKeyEnv?: string
-  /** Small/fast model used for classification, e.g. "google/gemini-2.5-flash-lite". */
-  model: string
-  /** Extra HTTP headers sent to the classifier endpoint. */
+  /** [source: endpoint] Extra HTTP headers. */
   headers?: Record<string, string>
-  /** Abort the classifier call after this many ms. Default 4000. */
+  /** Abort the classifier call after this many ms. Default 6000. */
   timeoutMs: number
   /** Only the first N characters of the prompt are sent to the classifier. Default 4000. */
   maxChars: number
@@ -157,6 +199,12 @@ export interface RouterConfig {
   routes: Record<Category, Route>
   /** Normalized winner share required to reroute. Below this we keep the user's model. Default 0.4. */
   minConfidence: number
+  /**
+   * When non-empty, ONLY these agents are routed. Default ["auto-router"]:
+   * the bundled agent (Tab to switch) — build and plan stay untouched.
+   * Set to [] to route every agent.
+   */
+  onlyAgents: string[]
   /** Agents that must never be rerouted. */
   skipAgents: string[]
   /** When the user explicitly picked a model variant, respect it and skip routing. Default true. */
@@ -249,6 +297,21 @@ export interface ModelCapabilities {
   imageInput?: boolean
   /** Whether the model exists in the user's configured providers, if known. */
   exists?: boolean
+  /** Zero input + output cost (e.g. zen free tier), if known. */
+  free?: boolean
+  /** Provider-reported lifecycle: "active" | "alpha" | "beta" | "deprecated". */
+  status?: string
+  /** Human display name (regex `prefer` patterns also match against it). */
+  name?: string
 }
 
 export type CapabilitiesLookup = (ref: ModelRef) => ModelCapabilities | undefined
+
+/** One entry of the live model catalog. */
+export interface CatalogEntry {
+  providerID: string
+  modelID: string
+  caps: ModelCapabilities
+}
+
+export type CatalogLister = () => CatalogEntry[]

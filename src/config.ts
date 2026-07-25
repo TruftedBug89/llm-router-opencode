@@ -20,19 +20,40 @@ import type { RouterConfig } from "./types.ts"
 export const CONFIG_FILENAME = "llm-router.json"
 export const CONFIG_ENV_OVERRIDE = "OPENCODE_LLM_ROUTER_CONFIG"
 
+export const CLASSIFIER_AGENT = "llm-router-classifier"
+export const ROUTER_AGENT = "auto-router"
+export const ROUTER_COMMAND = "router"
+
 export const DEFAULT_CONFIG: RouterConfig = {
   mode: "auto",
-  routes: {},
+  // Default routes target the opencode catalog: Go subscription models first,
+  // then zen, then zen FREE models — the first model available in YOUR catalog
+  // wins, so this works out of the box with zero configuration.
+  routes: {
+    trivial: ["opencode/mimo-v2.5-free", "opencode/big-pickle", "opencode/deepseek-v4-flash-free"],
+    simple: ["opencode/big-pickle", "opencode/mimo-v2.5-free", "opencode/deepseek-v4-flash-free"],
+    code: ["opencode-go/kimi-k2.7-code", "opencode/kimi-k2.7-code", "opencode/big-pickle"],
+    reasoning: ["opencode-go/kimi-k3", "opencode/kimi-k2.6", "opencode/nemotron-3-ultra-free"],
+    creative: ["opencode-go/qwen3.7-plus", "opencode/glm-5.1", "opencode/big-pickle"],
+    vision: ["opencode-go/mimo-v2.5", "opencode-go/kimi-k2.5"],
+    agentic: ["opencode-go/kimi-k2.7-code", "opencode/kimi-k2.7-code", "opencode/big-pickle"],
+    long_context: ["opencode/nemotron-3-ultra-free", "opencode-go/mimo-v2.5", "opencode/mimo-v2.5-free"],
+    // NOTE: free zen models are still cloud models. For true privacy point this
+    // at a local model, e.g. "ollama/qwen3:8b".
+    private: ["opencode/mimo-v2.5-free", "opencode/big-pickle"],
+  },
   minConfidence: 0.4,
-  skipAgents: [],
+  onlyAgents: [ROUTER_AGENT],
+  skipAgents: [CLASSIFIER_AGENT],
   respectVariant: true,
   notify: true,
   classifier: {
     enabled: true,
+    source: "opencode",
+    model: ["opencode/big-pickle", "opencode/mimo-v2.5-free", "opencode/deepseek-v4-flash-free"],
     baseURL: "https://openrouter.ai/api/v1",
     apiKeyEnv: "OPENROUTER_API_KEY",
-    model: "google/gemini-2.5-flash-lite",
-    timeoutMs: 4000,
+    timeoutMs: 6000,
     maxChars: 4000,
     weight: 2,
     when: "uncertain",
@@ -184,8 +205,8 @@ export function validateConfig(config: RouterConfig): string[] {
     warnings.push(`[llm-router] minConfidence must be in [0,1], using 0.4`)
     config.minConfidence = 0.4
   }
-  if (config.classifier.enabled && !config.classifier.baseURL) {
-    warnings.push(`[llm-router] classifier.baseURL is empty; classifier disabled`)
+  if (config.classifier.enabled && config.classifier.source === "endpoint" && !config.classifier.baseURL) {
+    warnings.push(`[llm-router] classifier.source is "endpoint" but baseURL is empty; classifier disabled`)
     config.classifier.enabled = false
   }
   if (config.signals.pii.action === "route" && !config.routes[config.signals.pii.route]) {

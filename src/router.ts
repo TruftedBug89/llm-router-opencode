@@ -69,6 +69,37 @@ function normalizeRouteTarget(route: string | RouteTarget): RouteTarget {
   return typeof route === "string" ? { model: route } : route
 }
 
+export interface ModelResolution {
+  model: ModelRef
+  /** Candidates skipped because they are unavailable (or malformed). */
+  skipped: string[]
+}
+
+/**
+ * Resolve a route target against the model catalog: the first candidate that
+ * is available wins. Without a catalog, the first well-formed candidate is
+ * used optimistically. Returns null when nothing is usable.
+ */
+export function resolveModel(target: string | string[], capabilities?: CapabilitiesLookup): ModelResolution | null {
+  const candidates = (Array.isArray(target) ? target : [target]).filter((c) => c !== "keep")
+  const skipped: string[] = []
+  for (const candidate of candidates) {
+    const ref = parseModelRef(candidate)
+    if (!ref) {
+      skipped.push(candidate)
+      continue
+    }
+    if (!capabilities) return { model: ref, skipped }
+    const caps = capabilities(ref)
+    if (caps?.exists === false) {
+      skipped.push(candidate)
+      continue
+    }
+    return { model: ref, skipped }
+  }
+  return null
+}
+
 function classifierVotes(c: Classification): Record<Category, number> {
   const votes: Record<Category, number> = {}
   const category = CLASSIFIER_CATEGORY_MAP[c.taskType] ?? "simple"
@@ -283,7 +314,8 @@ export async function decide(input: DecideInput): Promise<Decision> {
   }
 
   const target = normalizeRouteTarget(route)
-  if (target.model === "keep") {
+  const isKeep = Array.isArray(target.model) ? target.model.every((m) => m === "keep") : target.model === "keep"
+  if (isKeep) {
     return finish(
       baseDecision({
         category,
@@ -298,12 +330,13 @@ export async function decide(input: DecideInput): Promise<Decision> {
     )
   }
 
-  const model = parseModelRef(target.model)
-  if (!model) {
+  // -- 8. resolve the fallback chain against the model catalog -------------
+  const resolution = resolveModel(target.model, capabilities)
+  if (!resolution) {
     return finish(
       baseDecision({
         category,
-        reason: `route target "${target.model}" is not in provider/model format; keeping current model`,
+        reason: `no available model for "${category}"; keeping current model`,
         confidence,
         scores: scoring.scores,
         vetoedBy,
@@ -313,25 +346,7 @@ export async function decide(input: DecideInput): Promise<Decision> {
       }),
     )
   }
-
-  // -- 8. don't route to a model that isn't available ----------------------
-  if (capabilities) {
-    const caps = capabilities(model)
-    if (caps?.exists === false) {
-      return finish(
-        baseDecision({
-          category,
-          reason: `route target ${model.providerID}/${model.modelID} is not available; keeping current model`,
-          confidence,
-          scores: scoring.scores,
-          vetoedBy,
-          classifierUsed,
-          classification,
-          signals: signalsSummary,
-        }),
-      )
-    }
-  }
+  const model = resolution.model
 
   // -- 9. no-op if we would route to the model already in use --------------
   if (ctx.currentModel && ctx.currentModel.providerID === model.providerID && ctx.currentModel.modelID === model.modelID) {
@@ -349,13 +364,15 @@ export async function decide(input: DecideInput): Promise<Decision> {
     )
   }
 
+  const fallbackNote =
+    resolution.skipped.length > 0 ? ` (${resolution.skipped.join(", ")} unavailable, fell back)` : ""
   const params: RouteParams | undefined = target.params
   return finish({
     action: "route",
     category,
     model,
     params,
-    reason: veto ? veto.reason : `routed to "${category}" (confidence ${confidence.toFixed(2)})`,
+    reason: (veto ? veto.reason : `routed to "${category}" (confidence ${confidence.toFixed(2)})`) + fallbackNote,
     confidence,
     scores: scoring.scores,
     vetoedBy,
