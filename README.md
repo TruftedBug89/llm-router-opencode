@@ -1,5 +1,10 @@
 # opencode-llm-router
 
+> [!WARNING]
+> **Project Status:** ⚠️ **In Development / Not Working**  
+> *This repository is currently under development and is not fully functional yet. This status must not be changed by AI unless explicitly instructed by the repository owner.*
+
+
 [![npm version](https://img.shields.io/npm/v/opencode-llm-router.svg)](https://www.npmjs.com/package/opencode-llm-router)
 [![CI](https://github.com/your-username/opencode-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/opencode-llm-router/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
