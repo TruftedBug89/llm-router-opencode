@@ -1,8 +1,8 @@
 # opencode-llm-router
 
 > [!WARNING]
-> **Project Status:** ⚠️ **In Development / Not Working**  
-> *This repository is currently under development and is not fully functional yet. This status must not be changed by AI unless explicitly instructed by the repository owner.*
+> **Project Status:** 🧪 **Beta — In Testing**
+> *Features implemented and CI-verified; awaiting user testing before it's marked as Working. This status must not be changed by AI unless explicitly instructed by the repository owner.*
 
 
 [![npm version](https://img.shields.io/npm/v/opencode-llm-router.svg)](https://www.npmjs.com/package/opencode-llm-router)
