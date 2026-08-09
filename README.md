@@ -6,7 +6,7 @@
 
 
 [![npm version](https://img.shields.io/npm/v/opencode-llm-router.svg)](https://www.npmjs.com/package/opencode-llm-router)
-[![CI](https://github.com/your-username/opencode-llm-router/actions/workflows/ci.yml/badge.svg)](https://github.com/your-username/opencode-llm-router/actions/workflows/ci.yml)
+[![CI](https://github.com/TruftedBug89/llm-router-opencode/actions/workflows/ci.yml/badge.svg)](https://github.com/TruftedBug89/llm-router-opencode/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Automatic LLM router for [opencode](https://opencode.ai).** Every message is analyzed in milliseconds by a fusion of local signals **plus a small AI from your own opencode catalog**, then answered by the best model for the job. Free models for the small stuff, your best models for the hard stuff, a private lane for your secrets.

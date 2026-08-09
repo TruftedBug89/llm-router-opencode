@@ -26,6 +26,8 @@ export interface Capabilities {
 }
 
 const DEFAULT_TTL_MS = 60_000
+/** Bound on a single catalog fetch so a stalled server never blocks startup. */
+const FETCH_TIMEOUT_MS = 8_000
 
 interface RawModel {
   id?: string
@@ -107,20 +109,33 @@ export function normalizeCatalog(payload: unknown): Map<string, ModelCapabilitie
   return map
 }
 
-export async function createCapabilities(client: unknown, ttlMs: number = DEFAULT_TTL_MS): Promise<Capabilities> {
+export async function createCapabilities(
+  client: unknown,
+  ttlMs: number = DEFAULT_TTL_MS,
+  fetchTimeoutMs: number = FETCH_TIMEOUT_MS,
+): Promise<Capabilities> {
   let map = new Map<string, ModelCapabilities>()
   let loadedAt = 0
+  let lastAttempt = 0
   let refreshing = false
 
   const doRefresh = async (): Promise<void> => {
     if (refreshing) return
     refreshing = true
+    lastAttempt = Date.now()
     try {
       const providerApi = asRecord(client)?.["provider"] as
         | { list?: (args?: unknown) => Promise<unknown> }
         | undefined
       if (providerApi?.list) {
-        const result = await providerApi.list()
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), fetchTimeoutMs)
+        let result: unknown
+        try {
+          result = await providerApi.list({ signal: controller.signal } as never)
+        } finally {
+          clearTimeout(timer)
+        }
         const fresh = normalizeCatalog(result)
         if (fresh.size > 0) {
           map = fresh
@@ -134,10 +149,15 @@ export async function createCapabilities(client: unknown, ttlMs: number = DEFAUL
     }
   }
 
-  await doRefresh()
+  // Kick the initial fetch off in the background: at plugin-init time the
+  // opencode server may not be accepting requests yet, and awaiting it here
+  // would hang opencode's startup indefinitely. Lookups retry until it lands.
+  void doRefresh()
 
   const maybeRefresh = (): void => {
-    if (map.size > 0 && Date.now() - loadedAt > ttlMs) void doRefresh()
+    const stale = map.size === 0 || Date.now() - loadedAt > ttlMs
+    // throttle retries so a persistently failing catalog is not hammered
+    if (stale && Date.now() - lastAttempt > Math.min(ttlMs, 5000)) void doRefresh()
   }
 
   const lookup: CapabilitiesLookup = (ref: ModelRef) => {

@@ -30,9 +30,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/your-username/opencode-llm-router.git"
+    "url": "git+https://github.com/TruftedBug89/llm-router-opencode.git"
   },
-  "homepage": "https://github.com/your-username/opencode-llm-router#readme",
+  "homepage": "https://github.com/TruftedBug89/llm-router-opencode#readme",
   "engines": {
     "node": ">=22.6.0"
   },

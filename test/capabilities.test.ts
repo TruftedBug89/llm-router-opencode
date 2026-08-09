@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { normalizeCatalog } from "../src/capabilities.ts"
+import { createCapabilities, normalizeCatalog } from "../src/capabilities.ts"
 
 const PAYLOAD = {
   all: [
@@ -70,4 +70,78 @@ test("normalizeCatalog tolerates garbage", () => {
   assert.equal(normalizeCatalog(null).size, 0)
   assert.equal(normalizeCatalog("nope").size, 0)
   assert.equal(normalizeCatalog({ all: "nope" }).size, 0)
+})
+
+
+const PAYLOAD_SINGLE = {
+  all: [
+    {
+      id: "opencode",
+      models: {
+        "big-pickle": {
+          name: "Big Pickle",
+          status: "active",
+          cost: { input: 0, output: 0 },
+          limit: { context: 128_000, output: 32_000 },
+        },
+      },
+    },
+  ],
+}
+
+test("createCapabilities does not block on a slow initial catalog fetch", async () => {
+  let resolveList: (value: unknown) => void = () => {}
+  const gate = new Promise<unknown>((resolve) => {
+    resolveList = resolve
+  })
+  const client = { provider: { list: async () => gate } }
+  const caps = await createCapabilities(client)
+  // init returns immediately even though the catalog fetch is still pending
+  assert.equal(caps.size, 0)
+
+  resolveList({ data: PAYLOAD_SINGLE })
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  assert.equal(caps.size, 1)
+  assert.equal(caps.lookup({ providerID: "opencode", modelID: "big-pickle" })?.free, true)
+})
+
+test("a stalled catalog fetch aborts after the timeout and degrades to empty", async () => {
+  const client = {
+    provider: {
+      list: async (opts: { signal?: AbortSignal }): Promise<never> =>
+        new Promise((_, reject) => {
+          opts.signal?.addEventListener("abort", () => reject(new Error("aborted")))
+        }),
+    },
+  }
+  const started = Date.now()
+  const caps = await createCapabilities(client, 60_000, 50)
+  assert.equal(caps.size, 0)
+  // refresh() also resolves (aborted) instead of hanging
+  await caps.refresh()
+  assert.ok(Date.now() - started < 2_000)
+  assert.equal(caps.size, 0)
+})
+
+test("lookup retries the catalog when the initial fetch failed", async () => {
+  let calls = 0
+  const client = {
+    provider: {
+      list: async (): Promise<unknown> => {
+        calls++
+        if (calls === 1) throw new Error("server not ready yet")
+        return { data: PAYLOAD_SINGLE }
+      },
+    },
+  }
+  const caps = await createCapabilities(client, 100)
+  assert.equal(caps.size, 0) // initial fetch failed
+  assert.equal(calls, 1)
+
+  // retries are throttled; after the window a lookup refreshes the catalog
+  await new Promise((resolve) => setTimeout(resolve, 120))
+  caps.lookup({ providerID: "opencode", modelID: "big-pickle" })
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  assert.equal(caps.size, 1)
+  assert.equal(calls, 2)
 })

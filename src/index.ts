@@ -20,7 +20,6 @@
 import type { Config as PluginConfig, Plugin } from "@opencode-ai/plugin"
 import {
   CLASSIFIER_AGENT,
-  DEFAULT_CONFIG,
   ROUTER_AGENT,
   ROUTER_COMMAND,
   globalConfigPath,
@@ -117,16 +116,20 @@ const plugin: Plugin = async ({ client, directory, worktree }, options) => {
     if (config.debug) console.log(`[llm-router] ${message}`)
   }
 
-  // -- resolve the classifier model once at startup -------------------------
-  let classifierModel: ModelRef | null = null
+  // -- resolve the classifier model ------------------------------------------
+  // Resolved eagerly when the catalog is already loaded; otherwise re-resolved
+  // lazily on the first classification call (the catalog may still be warming
+  // up at plugin-init time).
+  const resolveClassifierModel = (): ModelRef | null =>
+    resolveModel(config.classifier.model, capabilities.lookup, capabilities.list)?.model ?? null
+
+  let classifierModel: ModelRef | null = resolveClassifierModel()
   let classifierEnabled = config.classifier.enabled
   if (classifierEnabled && config.classifier.source === "opencode") {
-    classifierModel = resolveModel(config.classifier.model, capabilities.lookup, capabilities.list)?.model ?? null
     if (!classifierModel) {
       console.warn(
-        `[llm-router] no classifier model available (${modelChainLabel(config.classifier.model)}); classifier disabled`,
+        `[llm-router] no classifier model available yet (${modelChainLabel(config.classifier.model)}); will retry on demand`,
       )
-      classifierEnabled = false
     }
   }
   if (
@@ -140,11 +143,15 @@ const plugin: Plugin = async ({ client, directory, worktree }, options) => {
   }
 
   const classifyFn =
-    !classifierEnabled || (config.classifier.source === "opencode" && !classifierModel)
+    !classifierEnabled
       ? undefined
       : config.classifier.source === "opencode"
-        ? (text: string, cfg: RouterConfig["classifier"]) =>
-            classifyViaOpencode(client as unknown as OpencodeClientLike, text, cfg, classifierModel!, CLASSIFIER_AGENT)
+        ? (text: string, cfg: RouterConfig["classifier"]) => {
+            const model = (classifierModel ??= resolveClassifierModel())
+            return model
+              ? classifyViaOpencode(client as unknown as OpencodeClientLike, text, cfg, model, CLASSIFIER_AGENT)
+              : Promise.resolve({ ok: false, cached: false, latencyMs: 0, error: "no classifier model available" })
+          }
         : classifyViaEndpoint
 
   for (const warning of warnings) console.warn(warning)
@@ -159,7 +166,7 @@ const plugin: Plugin = async ({ client, directory, worktree }, options) => {
       .join(" ")
     console.log(
       `[llm-router] active (mode=${config.mode}, agents=${config.onlyAgents.length > 0 ? config.onlyAgents.join(",") : "all"}, ` +
-        `classifier=${classifyFn ? (config.classifier.source === "opencode" ? fmt(classifierModel!) : "endpoint") : "off"}, ` +
+        `classifier=${classifyFn ? (config.classifier.source === "opencode" ? (classifierModel ? fmt(classifierModel) : "lazy") : "endpoint") : "off"}, ` +
         `catalog=${capabilities.size} models, config=${sources.length > 0 ? sources.join(" + ") : "defaults"})`,
     )
     console.log(`[llm-router] routes: ${resolvedRoutes}`)
@@ -326,6 +333,9 @@ const plugin: Plugin = async ({ client, directory, worktree }, options) => {
   }
 }
 
+// NOTE: opencode's plugin loader treats EVERY runtime export of the module as
+// a plugin candidate and fails the whole load if any export is not a function
+// (or `{ server }`). Only the plugin function may be exported at runtime — do
+// not add object/const exports here. Type-only exports are fine (erased).
 export default plugin
 export type { RouterConfig } from "./types.ts"
-export { DEFAULT_CONFIG } from "./config.ts"
